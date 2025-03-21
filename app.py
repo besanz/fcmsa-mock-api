@@ -69,7 +69,7 @@ class Load(BaseModel):
 # -----------------------------------------
 # Endpoint: GET /loads/{reference_number}
 # -----------------------------------------
-@app.get("/loads/{reference_number}", response_model=Load, dependencies=[Depends(get_api_key)])
+@app.get("/loads/{reference_number}", response_model=Load)
 def get_load(reference_number: str):
     """
     Retrieves load details by a flexible reference number format.
