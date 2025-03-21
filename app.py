@@ -10,7 +10,6 @@ app = FastAPI(
 # ------------------------------------------------
 # 1. In-Memory Carrier Database
 # ------------------------------------------------
-# For a more 'logical' approach, let's store known MC numbers here.
 carrier_db = {
     "MC123456": "ABC Trucking",
     "MC789012": "XYZ Freight",
@@ -76,8 +75,12 @@ async def verify_carrier(request: VerifyCarrierRequest):
 def get_load(reference_number: str):
     """
     Retrieves load details by reference_number from the CSV data.
-    If not found, returns a 404 error.
+    If the parameter still contains template placeholders, returns an error.
     """
+    # Check if the parameter has not been substituted
+    if "{{" in reference_number or "}}" in reference_number:
+        raise HTTPException(status_code=400, detail="Load reference parameter not replaced.")
+    
     ref = reference_number.strip()
     if ref in loads_data:
         return loads_data[ref]
@@ -90,7 +93,7 @@ def get_load(reference_number: str):
 class EvaluateOfferRequest(BaseModel):
     carrier_offer: int
     our_last_offer: int
-    offer_attempt: int = 1  # how many times we've countered
+    offer_attempt: int = 1
 
 class EvaluateOfferResponse(BaseModel):
     result: str   # "accept", "counter", or "decline"
@@ -103,10 +106,10 @@ class EvaluateOfferResponse(BaseModel):
 @app.post("/evaluate-offer", response_model=EvaluateOfferResponse)
 def evaluate_offer(request: EvaluateOfferRequest):
     """
-    Simulates a negotiation logic:
-    - If carrier_offer >= our_last_offer, we accept.
-    - Else we counter by meeting in the middle, up to 2 times.
-    - If offer_attempt > 1 and still no agreement, we do a final counter.
+    Simulates negotiation logic:
+    - If carrier_offer >= our_last_offer, accept.
+    - Otherwise, counter by meeting in the middle.
+    - If offer_attempt > 1, provide a final counter.
     """
     carrier_offer = request.carrier_offer
     our_last_offer = request.our_last_offer
