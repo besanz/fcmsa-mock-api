@@ -1,21 +1,11 @@
 import csv
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 app = FastAPI(
     title="Carrier Sales API",
     description="API for verifying carriers, retrieving load details from CSV, and evaluating offers."
 )
-
-# -----------------------------------------
-# Bonus Security: API Key Authentication
-# -----------------------------------------
-API_KEY = "mysecretkey"  # In production, store this securely
-
-def get_api_key(x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return x_api_key
 
 # -----------------------------------------
 # CSV-Based Load Data
@@ -97,7 +87,7 @@ class VerifyCarrierResponse(BaseModel):
     verified: bool
     carrier_name: str
 
-@app.post("/verify-carrier", response_model=VerifyCarrierResponse, dependencies=[Depends(get_api_key)])
+@app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
     Verifies the carrier’s MC number.
@@ -124,7 +114,7 @@ class EvaluateOfferResponse(BaseModel):
     new_offer: int
     message: str
 
-@app.post("/evaluate-offer", response_model=EvaluateOfferResponse, dependencies=[Depends(get_api_key)])
+@app.post("/evaluate-offer", response_model=EvaluateOfferResponse)
 def evaluate_offer(request: EvaluateOfferRequest):
     """
     Evaluates an offer:
