@@ -9,6 +9,7 @@ app = FastAPI(
 # ------------------------------------------------
 # 1. In-Memory Carrier Database
 # ------------------------------------------------
+# Known MC numbers for verification
 carrier_db = {
     "MC123456": "ABC Trucking",
     "MC789012": "XYZ Freight",
@@ -18,6 +19,7 @@ carrier_db = {
 # ------------------------------------------------
 # 2. In-Memory Load Data
 # ------------------------------------------------
+# Updated to include REF09460, REF04684, REF09690, and REF90781
 load_data = {
     "REF09460": {
         "reference_number": "REF09460",
@@ -54,6 +56,18 @@ load_data = {
         "is_partial": False,
         "pickup_time": "13:00",
         "delivery_time": "Friday, July 12th"
+    },
+    "REF90781": {
+        "reference_number": "REF90781",
+        "origin": "San Diego, CA",
+        "destination": "Phoenix, AZ",
+        "equipment_type": "Reefer",
+        "rate": 1200,
+        "commodity": "Produce",
+        "mc_number": "MC789012",
+        "is_partial": False,
+        "pickup_time": "16:00",
+        "delivery_time": "Saturday, July 13th"
     }
 }
 
@@ -79,14 +93,14 @@ async def verify_carrier(request: VerifyCarrierRequest):
     mc = request.mc_number.strip()
     if not mc.startswith("MC"):
         raise HTTPException(status_code=400, detail="Invalid MC number format. Must start with 'MC'.")
-    
+
     if mc in carrier_db:
         return VerifyCarrierResponse(verified=True, carrier_name=carrier_db[mc])
     else:
         raise HTTPException(status_code=404, detail="Carrier not found in our database.")
 
 # ------------------------------------------------
-# 5. Load Lookup Endpoint using In-Memory Data
+# 5. Load Lookup Endpoint
 # ------------------------------------------------
 @app.get("/loads/{reference_number}")
 def get_load(reference_number: str):
@@ -120,7 +134,7 @@ class EvaluateOfferResponse(BaseModel):
 def evaluate_offer(request: EvaluateOfferRequest):
     """
     Simulates negotiation logic:
-    - If carrier_offer >= our_last_offer, the offer is accepted.
+    - If carrier_offer >= our_last_offer, accept.
     - Otherwise, counter by meeting in the middle.
     - If offer_attempt > 1, provide a final counter.
     """
@@ -150,7 +164,7 @@ def evaluate_offer(request: EvaluateOfferRequest):
             )
 
 # ------------------------------------------------
-# 8. Main Entry Point for Local Testing
+# 8. Main Entry Point
 # ------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
