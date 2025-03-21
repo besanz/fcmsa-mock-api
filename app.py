@@ -10,6 +10,7 @@ app = FastAPI(
 # ------------------------------------------------
 # 1. In-Memory Carrier Database
 # ------------------------------------------------
+# Known MC numbers for verification
 carrier_db = {
     "MC123456": "ABC Trucking",
     "MC789012": "XYZ Freight",
@@ -62,7 +63,7 @@ async def verify_carrier(request: VerifyCarrierRequest):
     mc = request.mc_number.strip()
     if not mc.startswith("MC"):
         raise HTTPException(status_code=400, detail="Invalid MC number format. Must start with 'MC'.")
-    
+
     if mc in carrier_db:
         return VerifyCarrierResponse(verified=True, carrier_name=carrier_db[mc])
     else:
@@ -77,10 +78,10 @@ def get_load(reference_number: str):
     Retrieves load details by reference_number from the CSV data.
     If the parameter still contains template placeholders, returns an error.
     """
-    # Check if the parameter has not been substituted
+    # Check if the parameter was not replaced (e.g., still contains {{ or }})
     if "{{" in reference_number or "}}" in reference_number:
         raise HTTPException(status_code=400, detail="Load reference parameter not replaced.")
-    
+
     ref = reference_number.strip()
     if ref in loads_data:
         return loads_data[ref]
