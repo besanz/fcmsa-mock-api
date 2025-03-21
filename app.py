@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="Carrier Sales Mock API",
-    description="A mock API for verifying carriers, retrieving loads, and evaluating offers."
+    description="A self made FCMSA mock API for verifying carriers, retrieving loads, and evaluating offers."
 )
 
 # ------------------------------------------------
