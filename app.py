@@ -1,80 +1,95 @@
-from fastapi import FastAPI, HTTPException
+import csv
+from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel
 
 app = FastAPI(
-    title="Carrier Sales Mock API",
-    description="A self-made FMCSA mock API for verifying carriers, retrieving loads, and evaluating offers."
+    title="Carrier Sales API",
+    description="API for verifying carriers, retrieving load details from CSV, and evaluating offers."
 )
 
-# ------------------------------------------------
-# 1. In-Memory Carrier Database
-# ------------------------------------------------
+# -----------------------------------------
+# Bonus Security: API Key Authentication
+# -----------------------------------------
+API_KEY = "mysecretkey"  # In production, store this securely
+
+def get_api_key(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return x_api_key
+
+# -----------------------------------------
+# CSV-Based Load Data
+# -----------------------------------------
+# Global dictionary to hold load data indexed by normalized reference number.
+load_data_csv = {}
+
+def normalize_reference(ref: str) -> str:
+    """
+    Normalizes a reference number by:
+    - Removing the "REF" prefix if present.
+    - Stripping leading zeros.
+    """
+    ref = ref.strip().upper()
+    if ref.startswith("REF"):
+        ref = ref[3:]
+    return ref.lstrip("0")
+
+def load_csv_data(filename: str):
+    """
+    Loads load details from a CSV file and indexes by normalized reference number.
+    """
+    global load_data_csv
+    try:
+        with open(filename, mode="r", newline="") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                raw_ref = row.get("reference_number", "").strip().upper()
+                normalized = normalize_reference(raw_ref)
+                # Convert rate to number (float or int) if needed
+                try:
+                    row["rate"] = float(row["rate"])
+                except (ValueError, TypeError):
+                    row["rate"] = None
+                load_data_csv[normalized] = row
+    except FileNotFoundError:
+        print(f"CSV file {filename} not found. No load data loaded.")
+
+# Load the CSV on startup
+load_csv_data("loads.csv")
+
+# Pydantic model for load response
+class Load(BaseModel):
+    reference_number: str
+    origin: str
+    destination: str
+    equipment_type: str
+    rate: float
+    commodity: str
+
+# -----------------------------------------
+# Endpoint: GET /loads/{reference_number}
+# -----------------------------------------
+@app.get("/loads/{reference_number}", response_model=Load, dependencies=[Depends(get_api_key)])
+def get_load(reference_number: str):
+    """
+    Retrieves load details by a flexible reference number format.
+    Accepts formats like "REF09460", "09460", or "9460".
+    """
+    normalized = normalize_reference(reference_number)
+    if normalized in load_data_csv:
+        return load_data_csv[normalized]
+    else:
+        raise HTTPException(status_code=404, detail="Load not found")
+
+# -----------------------------------------
+# Carrier Verification (Simulated FMCSA API)
+# -----------------------------------------
 carrier_db = {
     "MC123456": "ABC Trucking",
     "MC789012": "XYZ Freight",
     "MC345678": "Delta Logistics"
 }
 
-# ------------------------------------------------
-# 2. In-Memory Load Data
-# ------------------------------------------------
-# We'll store keys like "9460", "4684", "9690", "90781"
-# so that the user can pass "REF09460" or "09460" or "9460" 
-# and we unify it internally to "9460" to find the data.
-load_data = {
-    "9460": {
-        "reference_number": "REF09460",
-        "origin": "Denver, CO",
-        "destination": "Detroit, MI",
-        "equipment_type": "Dry Van",
-        "rate": 868,
-        "commodity": "Automotive Parts",
-        "mc_number": "MC123456",
-        "is_partial": True,
-        "pickup_time": "15:00",
-        "delivery_time": "Friday, July 12th"
-    },
-    "4684": {
-        "reference_number": "REF04684",
-        "origin": "Dallas, TX",
-        "destination": "Chicago, IL",
-        "equipment_type": "Dry Van or Flatbed",
-        "rate": 570,
-        "commodity": "Agricultural Products",
-        "mc_number": "MC789012",
-        "is_partial": False,
-        "pickup_time": "14:00",
-        "delivery_time": "Friday, July 12th"
-    },
-    "9690": {
-        "reference_number": "REF09690",
-        "origin": "Detroit, MI",
-        "destination": "Nashville, TN",
-        "equipment_type": "Dry Van",
-        "rate": 1495,
-        "commodity": "Industrial Equipment",
-        "mc_number": "MC345678",
-        "is_partial": False,
-        "pickup_time": "13:00",
-        "delivery_time": "Friday, July 12th"
-    },
-    "90781": {
-        "reference_number": "REF90781",
-        "origin": "San Diego, CA",
-        "destination": "Phoenix, AZ",
-        "equipment_type": "Reefer",
-        "rate": 1200,
-        "commodity": "Produce",
-        "mc_number": "MC789012",
-        "is_partial": False,
-        "pickup_time": "16:00",
-        "delivery_time": "Saturday, July 13th"
-    }
-}
-
-# ------------------------------------------------
-# 3. Carrier Verification
-# ------------------------------------------------
 class VerifyCarrierRequest(BaseModel):
     mc_number: str
 
@@ -82,51 +97,23 @@ class VerifyCarrierResponse(BaseModel):
     verified: bool
     carrier_name: str
 
-@app.post("/verify-carrier", response_model=VerifyCarrierResponse)
+@app.post("/verify-carrier", response_model=VerifyCarrierResponse, dependencies=[Depends(get_api_key)])
 async def verify_carrier(request: VerifyCarrierRequest):
     """
-    Verifies the carrier's MC number against our in-memory carrier_db.
-    Returns a JSON with "verified" and "carrier_name".
+    Verifies the carrier’s MC number.
+    (In a real implementation, this would proxy a request to the FMCSA API.)
     """
     mc = request.mc_number.strip()
     if not mc.startswith("MC"):
         raise HTTPException(status_code=400, detail="Invalid MC number format. Must start with 'MC'.")
-
     if mc in carrier_db:
         return VerifyCarrierResponse(verified=True, carrier_name=carrier_db[mc])
     else:
         raise HTTPException(status_code=404, detail="Carrier not found in our database.")
 
-# ------------------------------------------------
-# 4. Load Lookup
-# ------------------------------------------------
-class LoadLookupRequest(BaseModel):
-    reference_number: str
-
-@app.post("/loads/lookup")
-def lookup_load(request: LoadLookupRequest):
-    """
-    Accepts a reference_number in any format: "REF09460", "09460", "9460".
-    Strips 'REF' if present and leading zeros, then finds the data in 'load_data'.
-    """
-    raw_ref = request.reference_number.strip().upper()  # e.g. "REF09460", "09460", "9460"
-    # Remove "REF" prefix if it exists
-    if raw_ref.startswith("REF"):
-        raw_ref = raw_ref[3:]  # remove the first 3 chars "REF"
-    # Remove leading zeros
-    stripped_ref = raw_ref.lstrip("0")  # e.g. "09460" -> "9460"
-
-    if not stripped_ref:
-        raise HTTPException(status_code=400, detail="Reference number is empty after stripping REF/zeros.")
-
-    if stripped_ref in load_data:
-        return load_data[stripped_ref]
-    else:
-        raise HTTPException(status_code=404, detail="Load not found")
-
-# ------------------------------------------------
-# 5. Offer Evaluation
-# ------------------------------------------------
+# -----------------------------------------
+# Offer Evaluation
+# -----------------------------------------
 class EvaluateOfferRequest(BaseModel):
     carrier_offer: int
     our_last_offer: int
@@ -137,13 +124,13 @@ class EvaluateOfferResponse(BaseModel):
     new_offer: int
     message: str
 
-@app.post("/evaluate-offer", response_model=EvaluateOfferResponse)
+@app.post("/evaluate-offer", response_model=EvaluateOfferResponse, dependencies=[Depends(get_api_key)])
 def evaluate_offer(request: EvaluateOfferRequest):
     """
-    Negotiation logic:
-    - If carrier_offer >= our_last_offer, accept.
-    - Else counter by meeting in the middle.
-    - If offer_attempt > 1, final counter.
+    Evaluates an offer:
+      - Accept if carrier_offer >= our_last_offer.
+      - Otherwise, counter by averaging the two values.
+      - If offer_attempt > 1, this represents the final counter.
     """
     carrier_offer = request.carrier_offer
     our_last_offer = request.our_last_offer
@@ -170,9 +157,9 @@ def evaluate_offer(request: EvaluateOfferRequest):
                 message=f"This is our final counter at {new_offer}."
             )
 
-# ------------------------------------------------
-# 6. Main Entry Point
-# ------------------------------------------------
+# -----------------------------------------
+# Main Entry Point
+# -----------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
