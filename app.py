@@ -47,7 +47,7 @@ def load_csv_data(filename: str):
 # Load the CSV on startup
 load_csv_data("loads.csv")
 
-# Pydantic model for load response
+# Pydantic model for load details
 class Load(BaseModel):
     reference_number: str
     origin: str
@@ -56,16 +56,20 @@ class Load(BaseModel):
     rate: float
     commodity: str
 
+# Pydantic model for load lookup request
+class LoadLookupRequest(BaseModel):
+    reference_number: str
+
 # -----------------------------------------
-# POST /loads/{reference_number}
+# POST /loads
 # -----------------------------------------
-@app.post("/loads/{reference_number}", response_model=Load)
-def get_load(reference_number: str):
+@app.post("/loads", response_model=Load)
+def get_load(request: LoadLookupRequest):
     """
-    Retrieves load details by a flexible reference number format (via POST).
-    Accepts formats like "REF09460", "09460", or "9460" in the path.
+    Retrieves load details by reference number from the request body.
+    Accepts formats like "REF09460", "09460", or "9460".
     """
-    normalized = normalize_reference(reference_number)
+    normalized = normalize_reference(request.reference_number)
     if normalized in load_data_csv:
         return load_data_csv[normalized]
     else:
