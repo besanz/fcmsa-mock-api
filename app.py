@@ -57,13 +57,13 @@ class Load(BaseModel):
     commodity: str
 
 # -----------------------------------------
-# Endpoint: GET /loads/{reference_number}
+# POST /loads/{reference_number}
 # -----------------------------------------
-@app.get("/loads/{reference_number}", response_model=Load)
+@app.post("/loads/{reference_number}", response_model=Load)
 def get_load(reference_number: str):
     """
-    Retrieves load details by a flexible reference number format.
-    Accepts formats like "REF09460", "09460", or "9460".
+    Retrieves load details by a flexible reference number format (via POST).
+    Accepts formats like "REF09460", "09460", or "9460" in the path.
     """
     normalized = normalize_reference(reference_number)
     if normalized in load_data_csv:
@@ -90,8 +90,7 @@ class VerifyCarrierResponse(BaseModel):
 @app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
-    Verifies the carrier’s MC number.
-    (In a real implementation, this would proxy a request to the FMCSA API.)
+    Verifies the carrier’s MC number (simulates FMCSA API).
     """
     mc = request.mc_number.strip()
     if not mc.startswith("MC"):
@@ -120,7 +119,7 @@ def evaluate_offer(request: EvaluateOfferRequest):
     Evaluates an offer:
       - Accept if carrier_offer >= our_last_offer.
       - Otherwise, counter by averaging the two values.
-      - If offer_attempt > 1, this represents the final counter.
+      - If offer_attempt > 1, this is our final counter.
     """
     carrier_offer = request.carrier_offer
     our_last_offer = request.our_last_offer
