@@ -10,7 +10,6 @@ app = FastAPI(
 # ------------------------------------------------
 # 1. In-Memory Carrier Database
 # ------------------------------------------------
-# Known MC numbers for verification
 carrier_db = {
     "MC123456": "ABC Trucking",
     "MC789012": "XYZ Freight",
@@ -57,8 +56,9 @@ class VerifyCarrierResponse(BaseModel):
 @app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
-    Verifies the carrier's MC number against our mock carrier_db.
-    Returns a JSON with "verified" and "carrier_name".
+    Verifies the carrier's MC number against our in-memory carrier_db.
+    Returns a JSON with "verified" and "carrier_name" if found,
+    or a 404 if not found.
     """
     mc = request.mc_number.strip()
     if not mc.startswith("MC"):
@@ -70,18 +70,14 @@ async def verify_carrier(request: VerifyCarrierRequest):
         raise HTTPException(status_code=404, detail="Carrier not found in our database.")
 
 # ------------------------------------------------
-# 5. Load Lookup Endpoint using CSV data
+# 5. Load Lookup Endpoint
 # ------------------------------------------------
 @app.get("/loads/{reference_number}")
 def get_load(reference_number: str):
     """
     Retrieves load details by reference_number from the CSV data.
-    If the parameter still contains template placeholders, returns an error.
+    If not found, returns a 404 error.
     """
-    # Check if the parameter was not replaced (e.g., still contains {{ or }})
-    if "{{" in reference_number or "}}" in reference_number:
-        raise HTTPException(status_code=400, detail="Load reference parameter not replaced.")
-
     ref = reference_number.strip()
     if ref in loads_data:
         return loads_data[ref]
@@ -116,6 +112,7 @@ def evaluate_offer(request: EvaluateOfferRequest):
     our_last_offer = request.our_last_offer
     attempt = request.offer_attempt
 
+    # If carrier's offer is >= our last ask, accept it.
     if carrier_offer >= our_last_offer:
         return EvaluateOfferResponse(
             result="accept",
@@ -123,6 +120,7 @@ def evaluate_offer(request: EvaluateOfferRequest):
             message="Offer accepted."
         )
     else:
+        # We haven't reached an agreement yet
         new_offer = (our_last_offer + carrier_offer) // 2
         if attempt == 1:
             return EvaluateOfferResponse(
@@ -138,7 +136,7 @@ def evaluate_offer(request: EvaluateOfferRequest):
             )
 
 # ------------------------------------------------
-# 8. Main Entry Point for Local Testing
+# 8. Main Entry Point
 # ------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
