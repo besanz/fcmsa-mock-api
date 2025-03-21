@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import csv
 
 app = FastAPI(
     title="Carrier Sales Mock API",
@@ -17,28 +16,46 @@ carrier_db = {
 }
 
 # ------------------------------------------------
-# 2. CSV Load Data
+# 2. In-Memory Load Data
 # ------------------------------------------------
-def load_csv_data():
-    """Reads loads.csv and returns a dict of reference_number -> row data."""
-    loads_data = {}
-    try:
-        with open("loads.csv", newline="") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                # Normalize the reference number
-                ref = row["reference_number"].strip()
-                # Convert rate to int if it's numeric
-                try:
-                    row["rate"] = int(row["rate"])
-                except ValueError:
-                    row["rate"] = 0
-                loads_data[ref] = row
-    except FileNotFoundError:
-        print("WARNING: loads.csv not found. Make sure it exists in the same directory.")
-    return loads_data
-
-loads_data = load_csv_data()
+load_data = {
+    "REF09460": {
+        "reference_number": "REF09460",
+        "origin": "Denver, CO",
+        "destination": "Detroit, MI",
+        "equipment_type": "Dry Van",
+        "rate": 868,
+        "commodity": "Automotive Parts",
+        "mc_number": "MC123456",
+        "is_partial": True,
+        "pickup_time": "15:00",
+        "delivery_time": "Friday, July 12th"
+    },
+    "REF04684": {
+        "reference_number": "REF04684",
+        "origin": "Dallas, TX",
+        "destination": "Chicago, IL",
+        "equipment_type": "Dry Van or Flatbed",
+        "rate": 570,
+        "commodity": "Agricultural Products",
+        "mc_number": "MC789012",
+        "is_partial": False,
+        "pickup_time": "14:00",
+        "delivery_time": "Friday, July 12th"
+    },
+    "REF09690": {
+        "reference_number": "REF09690",
+        "origin": "Detroit, MI",
+        "destination": "Nashville, TN",
+        "equipment_type": "Dry Van",
+        "rate": 1495,
+        "commodity": "Industrial Equipment",
+        "mc_number": "MC345678",
+        "is_partial": False,
+        "pickup_time": "13:00",
+        "delivery_time": "Friday, July 12th"
+    }
+}
 
 # ------------------------------------------------
 # 3. Models for Carrier Verification
@@ -57,30 +74,29 @@ class VerifyCarrierResponse(BaseModel):
 async def verify_carrier(request: VerifyCarrierRequest):
     """
     Verifies the carrier's MC number against our in-memory carrier_db.
-    Returns a JSON with "verified" and "carrier_name" if found,
-    or a 404 if not found.
+    Returns a JSON with "verified" and "carrier_name".
     """
     mc = request.mc_number.strip()
     if not mc.startswith("MC"):
         raise HTTPException(status_code=400, detail="Invalid MC number format. Must start with 'MC'.")
-
+    
     if mc in carrier_db:
         return VerifyCarrierResponse(verified=True, carrier_name=carrier_db[mc])
     else:
         raise HTTPException(status_code=404, detail="Carrier not found in our database.")
 
 # ------------------------------------------------
-# 5. Load Lookup Endpoint
+# 5. Load Lookup Endpoint using In-Memory Data
 # ------------------------------------------------
 @app.get("/loads/{reference_number}")
 def get_load(reference_number: str):
     """
-    Retrieves load details by reference_number from the CSV data.
-    If not found, returns a 404 error.
+    Retrieves load details by reference_number from the in-memory load_data.
+    Returns a 404 error if the load is not found.
     """
     ref = reference_number.strip()
-    if ref in loads_data:
-        return loads_data[ref]
+    if ref in load_data:
+        return load_data[ref]
     else:
         raise HTTPException(status_code=404, detail="Load not found")
 
@@ -104,7 +120,7 @@ class EvaluateOfferResponse(BaseModel):
 def evaluate_offer(request: EvaluateOfferRequest):
     """
     Simulates negotiation logic:
-    - If carrier_offer >= our_last_offer, accept.
+    - If carrier_offer >= our_last_offer, the offer is accepted.
     - Otherwise, counter by meeting in the middle.
     - If offer_attempt > 1, provide a final counter.
     """
@@ -112,7 +128,6 @@ def evaluate_offer(request: EvaluateOfferRequest):
     our_last_offer = request.our_last_offer
     attempt = request.offer_attempt
 
-    # If carrier's offer is >= our last ask, accept it.
     if carrier_offer >= our_last_offer:
         return EvaluateOfferResponse(
             result="accept",
@@ -120,7 +135,6 @@ def evaluate_offer(request: EvaluateOfferRequest):
             message="Offer accepted."
         )
     else:
-        # We haven't reached an agreement yet
         new_offer = (our_last_offer + carrier_offer) // 2
         if attempt == 1:
             return EvaluateOfferResponse(
@@ -136,7 +150,7 @@ def evaluate_offer(request: EvaluateOfferRequest):
             )
 
 # ------------------------------------------------
-# 8. Main Entry Point
+# 8. Main Entry Point for Local Testing
 # ------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
