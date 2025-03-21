@@ -3,13 +3,12 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="Carrier Sales Mock API",
-    description="A self made FCMSA mock API for verifying carriers, retrieving loads, and evaluating offers."
+    description="A self-made FMCSA mock API for verifying carriers, retrieving loads, and evaluating offers."
 )
 
 # ------------------------------------------------
 # 1. In-Memory Carrier Database
 # ------------------------------------------------
-# Known MC numbers for verification
 carrier_db = {
     "MC123456": "ABC Trucking",
     "MC789012": "XYZ Freight",
@@ -19,9 +18,11 @@ carrier_db = {
 # ------------------------------------------------
 # 2. In-Memory Load Data
 # ------------------------------------------------
-# Updated to include REF09460, REF04684, REF09690, and REF90781
+# We'll store keys like "9460", "4684", "9690", "90781"
+# so that the user can pass "REF09460" or "09460" or "9460" 
+# and we unify it internally to "9460" to find the data.
 load_data = {
-    "REF09460": {
+    "9460": {
         "reference_number": "REF09460",
         "origin": "Denver, CO",
         "destination": "Detroit, MI",
@@ -33,7 +34,7 @@ load_data = {
         "pickup_time": "15:00",
         "delivery_time": "Friday, July 12th"
     },
-    "REF04684": {
+    "4684": {
         "reference_number": "REF04684",
         "origin": "Dallas, TX",
         "destination": "Chicago, IL",
@@ -45,7 +46,7 @@ load_data = {
         "pickup_time": "14:00",
         "delivery_time": "Friday, July 12th"
     },
-    "REF09690": {
+    "9690": {
         "reference_number": "REF09690",
         "origin": "Detroit, MI",
         "destination": "Nashville, TN",
@@ -57,7 +58,7 @@ load_data = {
         "pickup_time": "13:00",
         "delivery_time": "Friday, July 12th"
     },
-    "REF90781": {
+    "90781": {
         "reference_number": "REF90781",
         "origin": "San Diego, CA",
         "destination": "Phoenix, AZ",
@@ -72,7 +73,7 @@ load_data = {
 }
 
 # ------------------------------------------------
-# 3. Models for Carrier Verification
+# 3. Carrier Verification
 # ------------------------------------------------
 class VerifyCarrierRequest(BaseModel):
     mc_number: str
@@ -81,9 +82,6 @@ class VerifyCarrierResponse(BaseModel):
     verified: bool
     carrier_name: str
 
-# ------------------------------------------------
-# 4. Carrier Verification Endpoint
-# ------------------------------------------------
 @app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
@@ -100,22 +98,34 @@ async def verify_carrier(request: VerifyCarrierRequest):
         raise HTTPException(status_code=404, detail="Carrier not found in our database.")
 
 # ------------------------------------------------
-# 5. Load Lookup Endpoint
+# 4. Load Lookup
 # ------------------------------------------------
-@app.get("/loads/{reference_number}")
-def get_load(reference_number: str):
+class LoadLookupRequest(BaseModel):
+    reference_number: str
+
+@app.post("/loads/lookup")
+def lookup_load(request: LoadLookupRequest):
     """
-    Retrieves load details by reference_number from the in-memory load_data.
-    Returns a 404 error if the load is not found.
+    Accepts a reference_number in any format: "REF09460", "09460", "9460".
+    Strips 'REF' if present and leading zeros, then finds the data in 'load_data'.
     """
-    ref = reference_number.strip()
-    if ref in load_data:
-        return load_data[ref]
+    raw_ref = request.reference_number.strip().upper()  # e.g. "REF09460", "09460", "9460"
+    # Remove "REF" prefix if it exists
+    if raw_ref.startswith("REF"):
+        raw_ref = raw_ref[3:]  # remove the first 3 chars "REF"
+    # Remove leading zeros
+    stripped_ref = raw_ref.lstrip("0")  # e.g. "09460" -> "9460"
+
+    if not stripped_ref:
+        raise HTTPException(status_code=400, detail="Reference number is empty after stripping REF/zeros.")
+
+    if stripped_ref in load_data:
+        return load_data[stripped_ref]
     else:
         raise HTTPException(status_code=404, detail="Load not found")
 
 # ------------------------------------------------
-# 6. Models for Offer Evaluation
+# 5. Offer Evaluation
 # ------------------------------------------------
 class EvaluateOfferRequest(BaseModel):
     carrier_offer: int
@@ -127,16 +137,13 @@ class EvaluateOfferResponse(BaseModel):
     new_offer: int
     message: str
 
-# ------------------------------------------------
-# 7. Offer Evaluation Endpoint
-# ------------------------------------------------
 @app.post("/evaluate-offer", response_model=EvaluateOfferResponse)
 def evaluate_offer(request: EvaluateOfferRequest):
     """
-    Simulates negotiation logic:
+    Negotiation logic:
     - If carrier_offer >= our_last_offer, accept.
-    - Otherwise, counter by meeting in the middle.
-    - If offer_attempt > 1, provide a final counter.
+    - Else counter by meeting in the middle.
+    - If offer_attempt > 1, final counter.
     """
     carrier_offer = request.carrier_offer
     our_last_offer = request.our_last_offer
@@ -164,7 +171,7 @@ def evaluate_offer(request: EvaluateOfferRequest):
             )
 
 # ------------------------------------------------
-# 8. Main Entry Point
+# 6. Main Entry Point
 # ------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
