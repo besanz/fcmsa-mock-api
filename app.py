@@ -1,9 +1,9 @@
 import csv
 import requests
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-# FMCSA API key
+# Your FMCSA API key
 FCMSA_API_KEY = "cdc33e44d693a3a58451898d4ec9df862c65b954"
 
 app = FastAPI(
@@ -18,8 +18,7 @@ load_data_csv = {}
 
 def normalize_reference(ref: str) -> str:
     """
-    Normalizes a reference number by removing the 'REF' prefix if present
-    and stripping leading zeros.
+    Normalizes a reference number by removing the 'REF' prefix if present and stripping leading zeros.
     """
     ref = ref.strip().upper()
     if ref.startswith("REF"):
@@ -49,7 +48,7 @@ def load_csv_data(filename: str):
 load_csv_data("loads.csv")
 
 # ---------------------------------------------------
-# Models
+# Pydantic Models
 # ---------------------------------------------------
 class Load(BaseModel):
     reference_number: str
@@ -60,28 +59,7 @@ class Load(BaseModel):
     commodity: str
 
 class LoadLookupRequest(BaseModel):
-    reference_number: str = Field(..., example="REF09460")
-
-class VerifyCarrierRequest(BaseModel):
-    mc_number: str = Field(
-        ...,
-        example="MC845901", 
-        description="Can be 'MC' followed by digits (e.g., 'MC845901') or just digits (e.g., '845901')."
-    )
-
-class VerifyCarrierResponse(BaseModel):
-    verified: bool
-    carrier_name: str
-
-class EvaluateOfferRequest(BaseModel):
-    carrier_offer: int = Field(..., example=600)
-    our_last_offer: int = Field(..., example=700)
-    offer_attempt: int = Field(1, example=1)
-
-class EvaluateOfferResponse(BaseModel):
-    result: str   # "accept", "counter", or "decline"
-    new_offer: int
-    message: str
+    reference_number: str
 
 # ---------------------------------------------------
 # POST /loads
@@ -99,36 +77,47 @@ def get_load(request: LoadLookupRequest):
         raise HTTPException(status_code=404, detail="Load not found")
 
 # ---------------------------------------------------
-# Carrier Verification (FMCSA Endpoint)
+# Carrier Verification (Using FMCSA JSON API)
 # ---------------------------------------------------
+class VerifyCarrierRequest(BaseModel):
+    mc_number: str
+
+class VerifyCarrierResponse(BaseModel):
+    verified: bool
+    carrier_name: str
+
 @app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
-    Verifies the carrier’s MC number or numeric docket number using the FMCSA API.
+    Verifies the carrier’s MC number using the FMCSA endpoint.
+    Accepts either "MC845901" or "845901" (digits only). Internally, we use the numeric part.
     
-    Endpoint example:
-      https://mobile.fmcsa.dot.gov/qc/services/carriers/MC/{NUM}?webKey={API_KEY}
-    
-    Returns JSON with:
+    Calls:
+      https://mobile.fmcsa.dot.gov/qc/services/carriers/MC/{mc_number}?webKey={API_KEY}
+      
+    The endpoint is expected to return JSON with a structure like:
       {
         "content": {
           "carrier": [
             {
-              "carrierName": "Some Carrier Name",
+              "carrierName": "Carrier Legal Name",
               ...
             }
           ]
         }
       }
+    
+    Distinguishes between "not found" (404) and API errors (non‑200, non‑404).
     """
     mc_raw = request.mc_number.strip().upper()
-    # If it starts with "MC", remove it; else assume it's just digits
+    # Accept either "MC845901" or "845901"
     if mc_raw.startswith("MC"):
         mc_number_only = mc_raw[2:].strip()
-    else:
+    elif mc_raw.isdigit():
         mc_number_only = mc_raw
+    else:
+        raise HTTPException(status_code=400, detail="Invalid MC/docket number format. Provide digits or 'MC' followed by digits.")
 
-    # Build the FMCSA URL
     url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers/MC/{mc_number_only}?webKey={FCMSA_API_KEY}"
 
     try:
@@ -141,19 +130,16 @@ async def verify_carrier(request: VerifyCarrierRequest):
             data = resp.json()
         except ValueError:
             raise HTTPException(status_code=500, detail="FMCSA returned invalid JSON.")
-
         content = data.get("content")
         if not content:
-            raise HTTPException(status_code=404, detail="No content found in FMCSA data.")
+            raise HTTPException(status_code=404, detail="Carrier not found in FMCSA data (no content).")
         carriers = content.get("carrier")
         if not carriers or len(carriers) == 0:
-            raise HTTPException(status_code=404, detail="No carriers found in FMCSA data.")
-
+            raise HTTPException(status_code=404, detail="Carrier not found in FMCSA data (no carriers).")
         carrier_info = carriers[0]
         carrier_name = carrier_info.get("carrierName")
         if not carrier_name:
             raise HTTPException(status_code=404, detail="Carrier name not found in FMCSA data.")
-
         return VerifyCarrierResponse(verified=True, carrier_name=carrier_name)
     elif resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Carrier not found in FMCSA data.")
@@ -163,13 +149,23 @@ async def verify_carrier(request: VerifyCarrierRequest):
 # ---------------------------------------------------
 # Offer Evaluation
 # ---------------------------------------------------
+class EvaluateOfferRequest(BaseModel):
+    carrier_offer: int
+    our_last_offer: int
+    offer_attempt: int = 1
+
+class EvaluateOfferResponse(BaseModel):
+    result: str   # "accept", "counter", or "decline"
+    new_offer: int
+    message: str
+
 @app.post("/evaluate-offer", response_model=EvaluateOfferResponse)
 def evaluate_offer(request: EvaluateOfferRequest):
     """
     Evaluates an offer:
       - Accept if carrier_offer >= our_last_offer.
       - Otherwise, counter by averaging the two values.
-      - If offer_attempt > 1, it's considered final.
+      - If offer_attempt > 1, the counter is considered final.
     """
     carrier_offer = request.carrier_offer
     our_last_offer = request.our_last_offer
