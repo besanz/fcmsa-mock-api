@@ -1,6 +1,5 @@
 import csv
 import requests
-import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -80,7 +79,7 @@ def get_load(request: LoadLookupRequest):
         raise HTTPException(status_code=404, detail="Load not found")
 
 # ---------------------------------------------------
-# Carrier Verification (Using FMCSA API)
+# Carrier Verification (Using FMCSA JSON API)
 # ---------------------------------------------------
 class VerifyCarrierRequest(BaseModel):
     mc_number: str
@@ -92,33 +91,51 @@ class VerifyCarrierResponse(BaseModel):
 @app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
-    Verifies the carrier’s MC number using the FMCSA API.
-    The FMCSA endpoint is called with the full MC number as a parameter.
-    The response (in XML) is parsed to extract the carrier's name.
+    Verifies the carrier’s MC number using the FMCSA JSON endpoint.
+    Endpoint: https://mobile.fmcsa.dot.gov/qc/services/carriers/MC/{NUM}?webKey={API_KEY}
+    Returns JSON like:
+      {
+        "content": {
+          "carrier": [
+            {
+              "carrierName": "Some Carrier Name",
+              ...
+            }
+          ]
+        }
+      }
     """
     mc = request.mc_number.strip().upper()
     if not mc.startswith("MC"):
         raise HTTPException(status_code=400, detail="Invalid MC number format. Must start with 'MC'.")
 
-    # Build the FMCSA API URL.
-    url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers?mc={mc}&webKey={FCMSA_API_KEY}"
-    
+    # Extract the numeric part after 'MC'
+    mc_number_only = mc[2:]  # "MC123456" -> "123456"
+    url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers/MC/{mc_number_only}?webKey={FCMSA_API_KEY}"
+
     try:
         resp = requests.get(url, timeout=10)
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Error calling FMCSA API: {str(e)}")
-    
+
     if resp.status_code == 200:
-        # FMCSA API returns XML. Parse it to extract the carrier name.
+        # Parse JSON
         try:
-            root = ET.fromstring(resp.text)
-            carrier_name = root.findtext('carrierName')
-            if carrier_name:
-                return VerifyCarrierResponse(verified=True, carrier_name=carrier_name)
-            else:
-                raise HTTPException(status_code=404, detail="Carrier not found in FMCSA data.")
-        except ET.ParseError as pe:
-            raise HTTPException(status_code=500, detail=f"Error parsing FMCSA response: {str(pe)}")
+            data = resp.json()
+            # Expected structure: data["content"]["carrier"][0]["carrierName"]
+            content = data.get("content")
+            if not content:
+                raise HTTPException(status_code=404, detail="No content found in FMCSA data.")
+            carriers = content.get("carrier")
+            if not carriers or len(carriers) == 0:
+                raise HTTPException(status_code=404, detail="No carriers found in FMCSA data.")
+            carrier_info = carriers[0]
+            carrier_name = carrier_info.get("carrierName")
+            if not carrier_name:
+                raise HTTPException(status_code=404, detail="Carrier name not found in FMCSA data.")
+            return VerifyCarrierResponse(verified=True, carrier_name=carrier_name)
+        except ValueError:
+            raise HTTPException(status_code=500, detail="FMCSA returned invalid JSON.")
     else:
         raise HTTPException(status_code=404, detail="Carrier not found or FMCSA API error.")
 
