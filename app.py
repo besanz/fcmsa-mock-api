@@ -19,6 +19,7 @@ load_data_csv = {}
 def normalize_reference(ref: str) -> str:
     """
     Normalizes a reference number by removing the 'REF' prefix if present and stripping leading zeros.
+    For example: "REF09460" becomes "9460".
     """
     ref = ref.strip().upper()
     if ref.startswith("REF"):
@@ -98,40 +99,40 @@ def get_load(request: LoadLookupRequest):
         raise HTTPException(status_code=404, detail="Load not found")
 
 # ---------------------------------------------------
-# Carrier Verification (Using FMCSA "basics" endpoint)
+# Carrier Verification (Using FMCSA endpoint that works with MC number)
 # ---------------------------------------------------
 @app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
-    Verifies the carrier’s MC number using the FMCSA API via the "basics" endpoint.
+    Verifies the carrier's MC number using the FMCSA API.
     
-    Endpoint: 
-      https://mobile.fmcsa.dot.gov/qc/services/carriers/{mc_number}/basics?webKey={API_KEY}
-    
-    The endpoint returns JSON with a structure like:
+    This endpoint calls:
+      https://mobile.fmcsa.dot.gov/qc/services/carriers/{mc_number}?webKey={API_KEY}
+      
+    For example, if the user sends "MC845901" or "845901", the API strips "MC" (if present)
+    and calls:
+      https://mobile.fmcsa.dot.gov/qc/services/carriers/845901?webKey=...
+      
+    The JSON response is expected to contain:
       {
         "content": {
-          "carrier": [
-            {
-              "legalName": "Carrier Legal Name",
-              "dbaName": "Alternate Name",
-              ...
-            }
-          ]
-        }
+          "carrier": {
+             "legalName": "JOHN S THOMPSON HAULING INC",
+             ...
+          }
+        },
+        "retrievalDate": "..."
       }
-    
-    This function extracts the legal name (or dbaName as fallback) and returns it.
+      
+    The function extracts "legalName" (or falls back to "dbaName") and returns it.
     """
     mc_raw = request.mc_number.strip().upper()
-    # Accept "MC845901" or "845901"
     if mc_raw.startswith("MC"):
         mc_number_only = mc_raw[2:].strip()
     else:
         mc_number_only = mc_raw
 
-    # Build the FMCSA endpoint URL using the basics endpoint.
-    url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers/{mc_number_only}/basics?webKey={FCMSA_API_KEY}"
+    url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers/{mc_number_only}?webKey={FCMSA_API_KEY}"
     
     try:
         resp = requests.get(url, timeout=10)
@@ -146,11 +147,10 @@ async def verify_carrier(request: VerifyCarrierRequest):
         content = data.get("content")
         if not content:
             raise HTTPException(status_code=404, detail="No content found in FMCSA data.")
-        carriers = content.get("carrier")
-        if not carriers or len(carriers) == 0:
-            raise HTTPException(status_code=404, detail="No carriers found in FMCSA data.")
-        carrier_info = carriers[0]
-        # Prefer legalName; use dbaName if legalName is not available.
+        carrier_info = content.get("carrier")
+        if not carrier_info:
+            raise HTTPException(status_code=404, detail="Carrier not found in FMCSA data.")
+        # In this response, 'carrier' is an object, not a list.
         carrier_name = carrier_info.get("legalName") or carrier_info.get("dbaName")
         if not carrier_name:
             raise HTTPException(status_code=404, detail="Carrier name not found in FMCSA data.")
