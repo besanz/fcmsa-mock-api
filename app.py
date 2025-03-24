@@ -3,12 +3,12 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# FMCSA API key provided
+# Your FMCSA API key
 FCMSA_API_KEY = "cdc33e44d693a3a58451898d4ec9df862c65b954"
 
 app = FastAPI(
     title="Carrier Sales API",
-    description="API for verifying carriers via FMCSA, retrieving load details from CSV, and evaluating offers."
+    description="API for verifying carriers via FMCSA docket-number endpoint, retrieving load details from CSV, and evaluating offers."
 )
 
 # ---------------------------------------------------
@@ -18,9 +18,8 @@ load_data_csv = {}
 
 def normalize_reference(ref: str) -> str:
     """
-    Normalizes a reference number by:
-      - Removing the "REF" prefix if present.
-      - Stripping leading zeros.
+    Normalizes a reference number by removing the 'REF' prefix if present
+    and stripping leading zeros.
     """
     ref = ref.strip().upper()
     if ref.startswith("REF"):
@@ -46,11 +45,11 @@ def load_csv_data(filename: str):
     except FileNotFoundError:
         print(f"CSV file {filename} not found. No load data loaded.")
 
-# Load CSV data on startup
+# Load the CSV on startup
 load_csv_data("loads.csv")
 
 # ---------------------------------------------------
-# Pydantic Models
+# Models
 # ---------------------------------------------------
 class Load(BaseModel):
     reference_number: str
@@ -63,9 +62,7 @@ class Load(BaseModel):
 class LoadLookupRequest(BaseModel):
     reference_number: str
 
-# ---------------------------------------------------
 # POST /loads
-# ---------------------------------------------------
 @app.post("/loads", response_model=Load)
 def get_load(request: LoadLookupRequest):
     """
@@ -79,7 +76,7 @@ def get_load(request: LoadLookupRequest):
         raise HTTPException(status_code=404, detail="Load not found")
 
 # ---------------------------------------------------
-# Carrier Verification (Using FMCSA JSON API)
+# Carrier Verification via docket-number
 # ---------------------------------------------------
 class VerifyCarrierRequest(BaseModel):
     mc_number: str
@@ -91,27 +88,21 @@ class VerifyCarrierResponse(BaseModel):
 @app.post("/verify-carrier", response_model=VerifyCarrierResponse)
 async def verify_carrier(request: VerifyCarrierRequest):
     """
-    Verifies the carrier’s MC number using the FMCSA JSON endpoint.
-    Endpoint: https://mobile.fmcsa.dot.gov/qc/services/carriers/MC/{NUM}?webKey={API_KEY}
-    Returns JSON like:
-      {
-        "content": {
-          "carrier": [
-            {
-              "carrierName": "Some Carrier Name",
-              ...
-            }
-          ]
-        }
-      }
+    Verifies the carrier’s MC number or numeric docket number using the FMCSA API:
+      https://mobile.fmcsa.dot.gov/qc/services/carriers/docket-number/{NUMBER}?webKey=...
+    If user provides "MC123456", we strip "MC" to get "123456".
+    If user provides just "123456", we use that directly.
     """
-    mc = request.mc_number.strip().upper()
-    if not mc.startswith("MC"):
-        raise HTTPException(status_code=400, detail="Invalid MC number format. Must start with 'MC'.")
+    mc_raw = request.mc_number.strip().upper()
+    # If it starts with "MC", remove it:
+    if mc_raw.startswith("MC"):
+        mc_raw = mc_raw[2:].strip()  # e.g. "MC123456" -> "123456"
 
-    # Extract the numeric part after 'MC'
-    mc_number_only = mc[2:]  # "MC123456" -> "123456"
-    url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers/MC/{mc_number_only}?webKey={FCMSA_API_KEY}"
+    # mc_raw should now be the pure numeric portion
+    if not mc_raw.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid MC/docket number. Must be numeric after removing 'MC'.")
+
+    url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers/docket-number/{mc_raw}?webKey={FCMSA_API_KEY}"
 
     try:
         resp = requests.get(url, timeout=10)
@@ -119,23 +110,40 @@ async def verify_carrier(request: VerifyCarrierRequest):
         raise HTTPException(status_code=500, detail=f"Error calling FMCSA API: {str(e)}")
 
     if resp.status_code == 200:
-        # Parse JSON
         try:
             data = resp.json()
-            # Expected structure: data["content"]["carrier"][0]["carrierName"]
-            content = data.get("content")
-            if not content:
-                raise HTTPException(status_code=404, detail="No content found in FMCSA data.")
-            carriers = content.get("carrier")
-            if not carriers or len(carriers) == 0:
-                raise HTTPException(status_code=404, detail="No carriers found in FMCSA data.")
-            carrier_info = carriers[0]
-            carrier_name = carrier_info.get("carrierName")
-            if not carrier_name:
-                raise HTTPException(status_code=404, detail="Carrier name not found in FMCSA data.")
-            return VerifyCarrierResponse(verified=True, carrier_name=carrier_name)
         except ValueError:
             raise HTTPException(status_code=500, detail="FMCSA returned invalid JSON.")
+
+        # The structure typically:
+        # {
+        #   "content": {
+        #     "carrier": [
+        #       {
+        #         "legalName": "...",
+        #         "dbaName": "...",
+        #         ...
+        #       }
+        #     ]
+        #   }
+        # }
+        content = data.get("content")
+        if not content:
+            raise HTTPException(status_code=404, detail="No content found in FMCSA data.")
+        carriers = content.get("carrier")
+        if not carriers or len(carriers) == 0:
+            raise HTTPException(status_code=404, detail="No carriers found in FMCSA data.")
+
+        carrier_info = carriers[0]
+        # We prioritize legalName; fallback to dbaName
+        legal_name = carrier_info.get("legalName")
+        if not legal_name:
+            legal_name = carrier_info.get("dbaName")
+
+        if not legal_name:
+            raise HTTPException(status_code=404, detail="Carrier name not found in FMCSA data.")
+
+        return VerifyCarrierResponse(verified=True, carrier_name=legal_name)
     else:
         raise HTTPException(status_code=404, detail="Carrier not found or FMCSA API error.")
 
