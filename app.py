@@ -100,7 +100,8 @@ async def verify_carrier(request: VerifyCarrierRequest):
     if not mc.startswith("MC"):
         raise HTTPException(status_code=400, detail="Invalid MC number format. Must start with 'MC'.")
 
-    # Build the FMCSA API URL.
+    # Build the FMCSA API URL. Here we assume the API endpoint is:
+    # GET https://mobile.fmcsa.dot.gov/qc/services/carriers?mc={mc}&webKey={API_KEY}
     url = f"https://mobile.fmcsa.dot.gov/qc/services/carriers?mc={mc}&webKey={FCMSA_API_KEY}"
     
     try:
@@ -112,6 +113,7 @@ async def verify_carrier(request: VerifyCarrierRequest):
         # FMCSA API returns XML. Parse it to extract the carrier name.
         try:
             root = ET.fromstring(resp.text)
+            # The XML structure may vary; we try to extract the <carrierName> element.
             carrier_name = root.findtext('carrierName')
             if carrier_name:
                 return VerifyCarrierResponse(verified=True, carrier_name=carrier_name)
@@ -139,8 +141,8 @@ class EvaluateOfferResponse(BaseModel):
 def evaluate_offer(request: EvaluateOfferRequest):
     """
     Evaluates an offer:
-      - Accept if carrier_offer >= our_last_offer.
-      - Otherwise, counter by averaging the two values.
+      - Accepts if carrier_offer >= our_last_offer.
+      - Otherwise, counters by averaging the two values.
       - If offer_attempt > 1, the counter is considered final.
     """
     carrier_offer = request.carrier_offer
